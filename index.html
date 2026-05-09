@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recherche station manuelle - Palais des congrès</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Recherche station manuelle</h1>
+      <p>Outil d’aide rapide pour le COS — Palais des congrès de Montréal</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="card warning">
+      <strong>Important :</strong> cette application est un outil d’aide opérationnelle. Elle ne remplace pas les procédures officielles ni les vérifications exigées en sécurité incendie.
+    </section>
+
+    <section class="card">
+      <h2>1. Scanner le code du panneau</h2>
+      <p class="muted">Prends une photo claire du code affiché sur le panneau. Tu peux aussi saisir le code manuellement.</p>
+
+      <div class="grid">
+        <div>
+          <label for="imageInput">Photo du code</label>
+          <input id="imageInput" type="file" accept="image/*" capture="environment" />
+        </div>
+        <div>
+          <label for="manualCode">Recherche manuelle</label>
+          <div class="search-row">
+            <input id="manualCode" type="text" placeholder="Ex : 18-24/25, 2-19120, 15-350..." />
+            <button id="btnSearch" type="button">Rechercher</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="preview-wrap">
+        <img id="preview" alt="Aperçu de la photo" hidden />
+      </div>
+
+      <div class="actions">
+        <button id="btnOcr" type="button" disabled>Lire la photo avec OCR</button>
+        <button id="btnClear" type="button" class="secondary">Réinitialiser</button>
+      </div>
+
+      <div id="status" class="status">Chargement de la base des stations...</div>
+    </section>
+
+    <section class="card result-card">
+      <h2>2. Résultat</h2>
+      <div id="detected" class="detected">Code détecté : —</div>
+      <div id="result"></div>
+    </section>
+
+    <section class="card">
+      <h2>Recherche par mots-clés</h2>
+      <p class="muted">Utile si l’OCR lit mal le code. Exemple : “garage”, “St-Antoine”, “vestiaire”, “15-320”.</p>
+      <input id="keywordSearch" type="text" placeholder="Recherche dans station, localisation, description..." />
+      <div id="keywordResults" class="list-results"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
