@@ -175,3 +175,47 @@ button.secondary:hover { background: #dce4ef; }
   .search-row { flex-direction: column; }
   button { width: 100%; }
 }
+
+.preview-wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.preview-title {
+  margin: 0 0 6px;
+  font-weight: 700;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+#cropPreview {
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 10px;
+  border: 2px solid var(--blue-2);
+  background: white;
+}
+
+.ocr-text {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  background: #101828;
+  color: #e6f0ff;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: .9rem;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.description.primary {
+  font-size: 1.35rem;
+  border: 2px solid var(--success);
+  margin-bottom: 14px;
+}
+
+@media (max-width: 720px) {
+  .preview-wrap { grid-template-columns: 1fr; }
+}

@@ -38,7 +38,14 @@
       </div>
 
       <div class="preview-wrap">
-        <img id="preview" alt="Aperçu de la photo" hidden />
+        <div>
+          <p class="preview-title">Photo complète</p>
+          <img id="preview" alt="Aperçu de la photo" hidden />
+        </div>
+        <div>
+          <p class="preview-title">Zone rouge ciblée par l’OCR</p>
+          <img id="cropPreview" alt="Zone ciblée par OCR" hidden />
+        </div>
       </div>
 
       <div class="actions">
@@ -47,6 +54,7 @@
       </div>
 
       <div id="status" class="status">Chargement de la base des stations...</div>
+      <pre id="ocrText" class="ocr-text" hidden></pre>
     </section>
 
     <section class="card result-card">
