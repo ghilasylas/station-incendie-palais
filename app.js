@@ -62,6 +62,89 @@ function stationCodeBlob(station) {
   return normalizeCode(stationSearchBlob(station));
 }
 
+
+function tokensForMatch(value) {
+  return normalizeText(value)
+    .split(/[^A-Z0-9]+/)
+    .filter(t => t.length >= 3 && !['NON','PM','PMS','PRES','NIV','NIVEAU'].includes(t));
+}
+
+function getDoorCodes(value) {
+  const text = normalizeText(value).replace(/\s+/g, ' ');
+  return [...new Set((text.match(/\b\d{1,2}\s*[- ]\s*\d{3,5}[A-Z]?(?:\.\d)?\b/g) || [])
+    .map(x => x.replace(/\s+/g, '').replace(/(\d{1,2})-(\d+)/, '$1-$2')) )];
+}
+
+function getIdentCodes(value) {
+  const text = normalizeText(value);
+  return [...new Set((text.match(/\b\d{1,2}\s*[-/]\s*\d{1,3}\s*\/\s*\d{1,3}\b/g) || [])
+    .map(x => x.replace(/\s+/g, '').replace(/\//g, '/')) )];
+}
+
+function getLevels(value) {
+  const text = normalizeText(value).replace(/O/g, '0');
+  return [...new Set((text.match(/\b(?:N\.?\s*)?1[45]\d{3}\b/g) || [])
+    .map(x => (x.match(/1[45]\d{3}/) || [''])[0]).filter(Boolean))];
+}
+
+function stationScore(station, query) {
+  const qText = normalizeText(query);
+  const qCode = normalizeCode(query);
+  const blobText = stationSearchBlob(station);
+  const blobCode = stationCodeBlob(station);
+  let score = 0;
+  const reasons = [];
+
+  const id = normalizeCode(station.identification);
+  if (id && qCode && (id === qCode || qCode.includes(id) || id.includes(qCode))) {
+    score += 100; reasons.push('identification');
+  }
+
+  for (const code of getDoorCodes(query)) {
+    const c = normalizeCode(code);
+    if (c.length >= 5 && blobCode.includes(c)) {
+      score += 85; reasons.push(`porte/local ${code}`);
+    }
+  }
+
+  for (const code of getIdentCodes(query)) {
+    const c = normalizeCode(code);
+    if (id && (id === c || id.includes(c) || c.includes(id))) {
+      score += 100; reasons.push(`identification ${code}`);
+    }
+  }
+
+  for (const level of getLevels(query)) {
+    if (String(station.niveau || '').includes(level)) {
+      score += 8; reasons.push(`niveau ${level}`);
+    }
+  }
+
+  const qTokens = tokensForMatch(query);
+  const stationTokens = tokensForMatch(station.station + ' ' + station.description + ' ' + station.localisation);
+  for (const t of qTokens) {
+    if (blobText.includes(t)) {
+      let w = 4;
+      if (['VIGER','HALL','GARAGE','VESTIAIRE','SORTIE','PORTE','CAFE','MELK','SUD','NORD','OUEST','EST'].includes(t)) w = 10;
+      score += w; reasons.push(t);
+    }
+  }
+
+  // pénalité si la requête est trop vague (ex: S1, S.7, N.15000 uniquement)
+  const onlyWeak = qTokens.length === 0 && getDoorCodes(query).length === 0 && getIdentCodes(query).length === 0;
+  if (onlyWeak) score = 0;
+
+  return { station, score, reasons: [...new Set(reasons)] };
+}
+
+function findBestStations(query, minScore = 12) {
+  return stations
+    .map(s => stationScore(s, query))
+    .filter(x => x.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+}
+
 function extractPossibleCodes(text) {
   const normalized = normalizeText(text)
     .replace(/O/g, '0')
@@ -93,55 +176,15 @@ function extractPossibleCodes(text) {
   return [...new Set(candidates.filter(c => c && c.length >= 2))];
 }
 
-function findStation(query) {
-  const qText = normalizeText(query);
-  const qCode = normalizeCode(query);
-  if (!qText && !qCode) return null;
+function findStation(query, minScore = 12) {
+  const best = findBestStations(query, minScore);
+  return best.length ? best[0].station : null;
+}
 
-  // 1. Correspondance exacte sur identification
-  let found = stations.find(s => normalizeCode(s.identification) === qCode);
-  if (found) return found;
-
-  // 2. Correspondance exacte/partielle sur station ou identification
-  found = stations.find(s => {
-    const id = normalizeCode(s.identification);
-    const st = normalizeCode(s.station);
-    return (id && (id.includes(qCode) || qCode.includes(id))) || st.includes(qCode) || qCode.includes(st);
-  });
-  if (found) return found;
-
-  // 3. Si le code contient 15-602, 15 602, etc.
-  const codes = extractPossibleCodes(query).map(normalizeCode);
-  for (const c of codes) {
-    found = stations.find(s => stationCodeBlob(s).includes(c) || c.includes(normalizeCode(s.station)));
-    if (found) return found;
-  }
-
-  // 4. Recherche large
-  found = stations.find(s => stationCodeBlob(s).includes(qCode));
-  if (found) return found;
-
-  // 5. Score approximatif avec les mots reconnus par OCR
-  const queryTokens = normalizeText(query).split(/[^A-Z0-9]+/).filter(t => t.length >= 2);
-  let best = null;
-  let bestScore = 0;
-  for (const s of stations) {
-    const blob = stationSearchBlob(s);
-    let score = 0;
-    for (const token of queryTokens) {
-      if (blob.includes(token)) score += token.length >= 4 ? 3 : 1;
-    }
-    // priorité aux codes de porte/niveau
-    const doorCodes = (blob.match(/\b\d{1,2}-\d{3,5}\b/g) || []);
-    for (const dc of doorCodes) {
-      if (qText.includes(dc) || qCode.includes(normalizeCode(dc))) score += 10;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = s;
-    }
-  }
-  return bestScore >= 6 ? best : null;
+function findStationForOcr(query) {
+  // OCR : on exige une correspondance forte pour éviter les faux résultats comme "S1".
+  const best = findBestStations(query, 24);
+  return best.length ? best[0] : null;
 }
 
 function escapeHtml(text) {
@@ -173,13 +216,26 @@ function displayStation(station, searchedCode = '') {
   `;
 }
 
-function displayNoResult(query) {
+function displayNoResult(query, suggestions = []) {
   detectedBox.textContent = `Code détecté / recherché : ${query || '—'}`;
+  const suggestionHtml = suggestions.length ? `
+    <div class="suggestions">
+      <strong>Résultats possibles :</strong>
+      ${suggestions.map(x => `<button type="button" class="suggestion-btn" data-station-no="${escapeHtml(x.station.no)}">${escapeHtml(x.station.station)} — ${escapeHtml(x.station.description)}</button>`).join('')}
+    </div>` : '';
   resultBox.innerHTML = `
     <div class="no-result">
-      Aucun résultat trouvé. Essaie avec la recherche manuelle : par exemple seulement <b>15-602</b> ou un mot comme <b>garage</b>.
+      OCR non fiable ou code incomplet. Je préfère ne pas afficher une mauvaise station.
+      <br><br>Tape manuellement un élément visible, par exemple : <b>15-602</b>, <b>PM HALL VIGER SUD</b>, <b>VIGER</b> ou <b>15400</b>.
     </div>
+    ${suggestionHtml}
   `;
+  resultBox.querySelectorAll('.suggestion-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const st = stations.find(s => String(s.no) === btn.dataset.stationNo);
+      if (st) displayStation(st, query);
+    });
+  });
 }
 
 function searchAndDisplay(query) {
@@ -300,45 +356,40 @@ async function ocrAndSearch(file) {
     cropPreview.hidden = true;
   }
 
-  // Candidat secours : bande centrale de la photo
-  const hBand = Math.round(baseCanvas.height * 0.42);
-  const yBand = Math.round(baseCanvas.height * 0.22);
+  // Bande où se trouve habituellement la ligne violette avec le code.
+  const hBand = Math.round(baseCanvas.height * 0.26);
+  const yBand = Math.round(baseCanvas.height * 0.24);
   candidates.push({
-    label: 'Lecture OCR de la zone centrale',
+    label: 'Lecture OCR de la bande du code',
     canvas: preprocessForOcr(cropCanvas(baseCanvas, { x: 0, y: yBand, w: baseCanvas.width, h: hBand }))
   });
 
-  // Dernier secours : photo complète réduite
   candidates.push({ label: 'Lecture OCR complète', canvas: preprocessForOcr(baseCanvas) });
 
   let allText = '';
-  let found = null;
-  let usedCode = '';
+  let best = null;
 
   for (const item of candidates) {
     const text = await runOcrOnCanvas(item.canvas, item.label);
     allText += '\n' + text;
+
     const possibleCodes = extractPossibleCodes(text);
-
     for (const code of possibleCodes) {
-      found = findStation(code);
-      if (found) {
-        usedCode = code;
-        break;
-      }
+      const attempt = findStationForOcr(code);
+      if (attempt && (!best || attempt.score > best.score)) best = { ...attempt, usedCode: code };
     }
 
-    if (!found) {
-      found = findStation(text);
-      usedCode = possibleCodes[0] || text.trim();
-    }
-    if (found) break;
+    const attemptFull = findStationForOcr(text);
+    if (attemptFull && (!best || attemptFull.score > best.score)) best = { ...attemptFull, usedCode: text.trim() };
   }
 
   lastOcrText = allText.trim();
   ocrTextBox.textContent = lastOcrText || 'Aucun texte OCR lisible.';
   ocrTextBox.hidden = false;
-  return { found, usedCode, allText: lastOcrText };
+
+  // Ajout : si l’OCR contient VIGER/HALL/15400 mais pas assez fort, proposer les 5 meilleures options sans choisir automatiquement.
+  const suggestions = findBestStations(lastOcrText, 12);
+  return { found: best?.station || null, usedCode: best?.usedCode || '', allText: lastOcrText, suggestions };
 }
 
 imageInput.addEventListener('change', () => {
@@ -358,10 +409,10 @@ btnOcr.addEventListener('click', async () => {
   statusBox.textContent = 'Préparation de la photo...';
 
   try {
-    const { found, usedCode, allText } = await ocrAndSearch(selectedImage);
+    const { found, usedCode, allText, suggestions } = await ocrAndSearch(selectedImage);
     statusBox.textContent = 'OCR terminé. Recherche terminée.';
     if (found) displayStation(found, usedCode || allText);
-    else displayNoResult(extractPossibleCodes(allText)[0] || allText);
+    else displayNoResult(extractPossibleCodes(allText)[0] || allText, suggestions);
   } catch (error) {
     console.error(error);
     statusBox.textContent = 'Erreur OCR. Essaie une photo plus droite, plus proche, ou utilise la recherche manuelle.';

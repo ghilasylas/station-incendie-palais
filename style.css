@@ -219,3 +219,23 @@ button.secondary:hover { background: #dce4ef; }
 @media (max-width: 720px) {
   .preview-wrap { grid-template-columns: 1fr; }
 }
+
+.suggestions {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.suggestion-btn {
+  width: 100%;
+  text-align: left;
+  background: #ffffff;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-weight: 600;
+}
+.suggestion-btn:hover {
+  background: #eef4ff;
+  border-color: var(--blue-2);
+}
