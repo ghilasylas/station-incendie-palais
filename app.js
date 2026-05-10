@@ -171,10 +171,11 @@ function stationScore(station, query) {
   const sTokens = stationTokens(station);
   let tokenHits = 0;
   for (const t of qTokens) {
-    if (sTokens.includes(t) || blobText.includes(t)) {
+    const fuzzyHit = sTokens.some(st => st === t || st.startsWith(t) || t.startsWith(st) || (st.length >= 5 && t.includes(st)) || (t.length >= 5 && st.includes(t)));
+    if (sTokens.includes(t) || blobText.includes(t) || fuzzyHit) {
       tokenHits++;
       let w = 12;
-      if (['VIGER','MELK','CANADA','MONOPOLIE','JEANNE','MANCE','VESTIAIRE','PARKING','GARAGE','VIP','PIETON','QIM','ACCUEIL'].includes(t)) w = 25;
+      if (['VIGER','MELK','CANADA','MONOPOLIE','JEANNE','MANCE','MANCEN','VESTIAIRE','PARKING','GARAGE','VIP','PIETON','QIM','ACCUEIL'].includes(t)) w = 25;
       if (/^ESC[A-Z0-9]*/.test(t)) w = 20;
       score += w; reasons.push(t);
     }
@@ -433,39 +434,75 @@ function preprocessLineForOcr(sourceCanvas) {
   return out;
 }
 
-function extractPmLine(text) {
-  const normalized = normalizeText(text)
-    .replace(/[✓✔√]/g, '/')
-    .replace(/[\\|]/g, '/')
+function repairOcrPmFragment(value) {
+  let line = ocrClean(value)
+    .replace(/[✓✔√]/g, ' ')
+    .replace(/[\|]/g, ' ')
+    .replace(/([A-Z])PM\b/g, 'PM')          // B4PM / FAPM -> PM
     .replace(/P\s*M/g, 'PM')
     .replace(/P\.\s*M/g, 'PM')
-    .replace(/\s+/g, ' ');
-
-  // Cherche la portion qui commence par /PM ou PM, puis conserve les mots utiles.
-  const match = normalized.match(/(?:\/\s*)?PM\s+[A-Z0-9 .'-]+?(?=\s{2,}|$)/);
-  if (!match) return '';
-
-  let line = match[0]
-    .replace(/^\/\s*/, '')
-    .replace(/\b(ALARMES?|SUPERVISORY|SECURITES?|DEFECT|TROUBLE)\b.*$/g, '')
+    .replace(/MANCEN/g, 'MANCE N')
+    .replace(/MANCE\s*N\.?\s*15\s*S?\.?\s*6/g, 'MANCE N.15 S.6')
+    .replace(/N\.?\s*(\d{2})(\d)\b/g, 'N.$1 S.$2') // N.156 -> N.15 S.6
+    .replace(/N\.?\s*(\d{2})(\d{2})\b/g, 'N.$1 S.$2') // N.1556 -> N.15 S.56, utile mais pas prioritaire
+    .replace(/\b(ALARMES?|SUPERV|SUPERVISORY|SECURITES?|DEFECT|DEFFECT|TROUBLE|ACCUSE|RECEPTION|RETABLIR|REARMEMENT|SYSTEME)\b.*$/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
+  return line;
+}
 
-  // Si la ligne contient N.15400 ou S.7, on les garde, car ils aident à choisir.
-  const level = normalized.match(/\bN\.?\s*1[45]\d{3}\b/);
-  const sector = normalized.match(/\bS\.?\s*\d{1,2}\b/);
-  if (level && !line.includes(level[0])) line += ' ' + level[0];
-  if (sector && !line.includes(sector[0])) line += ' ' + sector[0];
-  return line.trim();
+function extractPmFragments(text) {
+  // Nouvelle logique V6 : on ne cherche pas seulement un code court.
+  // On cherche toutes les portions OCR qui contiennent PM, même si l'OCR ajoute des lettres avant : B4PM, FAPM, etc.
+  const rawLines = String(text || '').split(/[\n\r]+/);
+  const fragments = [];
+
+  for (const raw of rawLines) {
+    const cleaned = repairOcrPmFragment(raw);
+    const idx = cleaned.indexOf('PM');
+    if (idx !== -1) {
+      const frag = cleaned.slice(idx, idx + 90).trim();
+      if (frag.length >= 5) fragments.push(frag);
+    }
+  }
+
+  // Secours : parfois Tesseract colle tout sur une seule ligne.
+  const all = repairOcrPmFragment(text);
+  const re = /PM\s+[A-Z0-9 .'-]{3,80}/g;
+  let m;
+  while ((m = re.exec(all)) !== null) {
+    fragments.push(m[0].trim());
+  }
+
+  return [...new Set(fragments.map(f => f.replace(/\s+/g, ' ').trim()).filter(f => f.length >= 5))];
+}
+
+function extractPmLine(text) {
+  const fragments = extractPmFragments(text);
+  return fragments[0] || '';
+}
+
+function isWeakOcrCodeOnly(query) {
+  const q = ocrClean(query).trim();
+  // S.6, S1, N.15000 seuls ne doivent jamais être utilisés comme résultat OCR automatique.
+  return /^S\.?\s*\d{1,2}$/.test(q) || /^N\.?\s*\d{4,6}$/.test(q) || /^\d{4,6}$/.test(q);
 }
 
 function extractUsefulOcrQueries(text) {
   const queries = [];
-  const pmLine = extractPmLine(text);
-  if (pmLine) queries.push(pmLine);
-  extractPossibleCodes(text).forEach(c => queries.push(c));
+
+  // Priorité absolue : fragments PM. Exemple : PM HALL JEANNE-MANCE N.15 S.6
+  extractPmFragments(text).forEach(q => queries.push(q));
+
+  // Ensuite seulement les vrais codes de porte/local : 15-602, 15 602, etc.
+  getDoorCodes(text).forEach(c => queries.push(c));
+  getIdentCodes(text).forEach(c => queries.push(c));
+
+  // Dernier secours : texte complet, mais jamais un niveau/secteur seul.
   const full = normalizeText(text);
-  if (full) queries.push(full);
-  return [...new Set(queries.filter(q => q && q.length >= 2))];
+  if (full && !isWeakOcrCodeOnly(full)) queries.push(full);
+
+  return [...new Set(queries.filter(q => q && q.length >= 2 && !isWeakOcrCodeOnly(q)))];
 }
 
 function canvasToDataUrl(canvas) {
