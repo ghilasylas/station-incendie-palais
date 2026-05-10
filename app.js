@@ -63,86 +63,148 @@ function stationCodeBlob(station) {
 }
 
 
-function tokensForMatch(value) {
+
+function stationStationText(station) {
+  return normalizeText(station.station || '')
+    .replace(/P\s*\.\s*M\s*\.?/g, 'PM ')
+    .replace(/\bP\s*HAL\b/g, 'HALL')
+    .replace(/\bP\.HAL\b/g, 'HALL')
+    .replace(/\bREST\.?\b/g, 'RESTAURANT')
+    .replace(/\bVESTI\.?\b/g, 'VESTIAIRE')
+    .replace(/\bCORR\.?\b/g, 'CORRIDOR')
+    .replace(/\bCH\.?\b/g, 'CHAMBRE')
+    .replace(/\bELEC\.?\b/g, 'ELECTRIQUE')
+    .replace(/\bNIV\.?\b/g, 'NIVEAU')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function ocrClean(value) {
+  // Corrige les erreurs OCR fréquentes seulement pour la recherche.
   return normalizeText(value)
+    .replace(/[’']/g, '')
+    .replace(/P\s*\.\s*M\s*\.?/g, 'PM ')
+    .replace(/P\s*M/g, 'PM')
+    .replace(/\bP\s*HAL\b/g, 'HALL')
+    .replace(/\bP\.HAL\b/g, 'HALL')
+    .replace(/\bN\s*[.:]\s*/g, 'N.')
+    .replace(/\bS\s*[.:]\s*/g, 'S.')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokensForMatch(value) {
+  const stop = new Set(['NON','PM','PMS','P','M','NIV','NIVEAU','PRES','PRESSE','PORTE','LOCAL','SORTIE','ENTREE','HALL']);
+  return ocrClean(value)
     .split(/[^A-Z0-9]+/)
-    .filter(t => t.length >= 3 && !['NON','PM','PMS','PRES','NIV','NIVEAU'].includes(t));
+    .filter(t => t.length >= 3 && !stop.has(t));
+}
+
+function stationTokens(station) {
+  return tokensForMatch(stationStationText(station));
 }
 
 function getDoorCodes(value) {
-  const text = normalizeText(value).replace(/\s+/g, ' ');
-  return [...new Set((text.match(/\b\d{1,2}\s*[- ]\s*\d{3,5}[A-Z]?(?:\.\d)?\b/g) || [])
-    .map(x => x.replace(/\s+/g, '').replace(/(\d{1,2})-(\d+)/, '$1-$2')) )];
+  const text = ocrClean(value)
+    .replace(/[OQ]/g, '0')
+    .replace(/[IL|]/g, '1')
+    .replace(/B/g, '8')
+    .replace(/G/g, '6');
+  const matches = [];
+  // 15-602, 15 602, 22-100, 28-430, 16-104, 14.5 accepté aussi
+  (text.match(/\b\d{1,2}\s*[- ]\s*\d{3,5}[A-Z]?(?:\.\d)?\b/g) || []).forEach(m => {
+    matches.push(m.replace(/\s+/g, '').replace(/(\d{1,2})-(\d+)/, '$1-$2'));
+  });
+  return [...new Set(matches)];
 }
 
 function getIdentCodes(value) {
-  const text = normalizeText(value);
+  const text = ocrClean(value).replace(/[OQ]/g, '0').replace(/[IL|]/g, '1');
   return [...new Set((text.match(/\b\d{1,2}\s*[-/]\s*\d{1,3}\s*\/\s*\d{1,3}\b/g) || [])
     .map(x => x.replace(/\s+/g, '').replace(/\//g, '/')) )];
 }
 
 function getLevels(value) {
-  const text = normalizeText(value).replace(/O/g, '0');
-  return [...new Set((text.match(/\b(?:N\.?\s*)?1[45]\d{3}\b/g) || [])
-    .map(x => (x.match(/1[45]\d{3}/) || [''])[0]).filter(Boolean))];
+  const text = ocrClean(value).replace(/[OQ]/g, '0').replace(/[IL|]/g, '1');
+  return [...new Set((text.match(/\b(?:N\.?\s*)?\d{5}\b/g) || [])
+    .map(x => (x.match(/\d{5}/) || [''])[0]).filter(Boolean))];
+}
+
+function compactStation(value) {
+  return normalizeCode(value).replace(/PM/g, '').replace(/NIVEAU/g, '');
 }
 
 function stationScore(station, query) {
-  const qText = normalizeText(query);
-  const qCode = normalizeCode(query);
+  const qText = ocrClean(query);
+  const qCode = normalizeCode(qText);
   const blobText = stationSearchBlob(station);
+  const stationName = stationStationText(station);
+  const stationNameCode = compactStation(stationName);
   const blobCode = stationCodeBlob(station);
   let score = 0;
+  let strong = false;
   const reasons = [];
 
   const id = normalizeCode(station.identification);
-  if (id && qCode && (id === qCode || qCode.includes(id) || id.includes(qCode))) {
-    score += 100; reasons.push('identification');
+  if (id && qCode.length >= 4 && (id === qCode || qCode.includes(id) || id.includes(qCode))) {
+    score += 140; strong = true; reasons.push('identification exacte');
   }
 
-  for (const code of getDoorCodes(query)) {
+  const qDoors = getDoorCodes(qText);
+  const sDoors = getDoorCodes(station.station + ' ' + station.description + ' ' + station.identification);
+  for (const code of qDoors) {
     const c = normalizeCode(code);
-    if (c.length >= 5 && blobCode.includes(c)) {
-      score += 85; reasons.push(`porte/local ${code}`);
+    if (sDoors.map(normalizeCode).includes(c) || blobCode.includes(c)) {
+      score += 180; strong = true; reasons.push(`code porte/local ${code}`);
     }
   }
 
-  for (const code of getIdentCodes(query)) {
+  for (const code of getIdentCodes(qText)) {
     const c = normalizeCode(code);
     if (id && (id === c || id.includes(c) || c.includes(id))) {
-      score += 100; reasons.push(`identification ${code}`);
+      score += 150; strong = true; reasons.push(`identification ${code}`);
     }
   }
 
-  for (const level of getLevels(query)) {
-    if (String(station.niveau || '').includes(level)) {
-      score += 8; reasons.push(`niveau ${level}`);
-    }
-  }
-
-  const qTokens = tokensForMatch(query);
-  const stationTokens = tokensForMatch(station.station + ' ' + station.description + ' ' + station.localisation);
+  // Correspondance du nom de station, utile pour les stations sans numéro : CAFE MELK, POSTE CANADA, VIGER SUD, etc.
+  const qTokens = tokensForMatch(qText);
+  const sTokens = stationTokens(station);
+  let tokenHits = 0;
   for (const t of qTokens) {
-    if (blobText.includes(t)) {
-      let w = 4;
-      if (['VIGER','HALL','GARAGE','VESTIAIRE','SORTIE','PORTE','CAFE','MELK','SUD','NORD','OUEST','EST'].includes(t)) w = 10;
+    if (sTokens.includes(t) || blobText.includes(t)) {
+      tokenHits++;
+      let w = 12;
+      if (['VIGER','MELK','CANADA','MONOPOLIE','JEANNE','MANCE','VESTIAIRE','PARKING','GARAGE','VIP','PIETON','QIM','ACCUEIL'].includes(t)) w = 25;
+      if (/^ESC[A-Z0-9]*/.test(t)) w = 20;
       score += w; reasons.push(t);
     }
   }
+  if (tokenHits >= 2) strong = true;
 
-  // pénalité si la requête est trop vague (ex: S1, S.7, N.15000 uniquement)
-  const onlyWeak = qTokens.length === 0 && getDoorCodes(query).length === 0 && getIdentCodes(query).length === 0;
-  if (onlyWeak) score = 0;
+  // Si la requête contient presque exactement le libellé de la colonne Station manuelle.
+  const qCompact = compactStation(qText);
+  if (qCompact.length >= 6 && (stationNameCode.includes(qCompact) || qCompact.includes(stationNameCode))) {
+    score += 100; strong = true; reasons.push('libellé station');
+  }
 
-  return { station, score, reasons: [...new Set(reasons)] };
+  for (const level of getLevels(qText)) {
+    if (String(station.niveau || '').includes(level)) {
+      score += 6; reasons.push(`niveau ${level}`);
+    }
+  }
+
+  // Niveau seul, secteur seul, S1/S2 seul = jamais suffisant.
+  if (!strong) score = Math.min(score, 20);
+
+  return { station, score, reasons: [...new Set(reasons)], strong };
 }
 
-function findBestStations(query, minScore = 12) {
+function findBestStations(query, minScore = 25, requireStrong = false) {
   return stations
     .map(s => stationScore(s, query))
-    .filter(x => x.score >= minScore)
+    .filter(x => x.score >= minScore && (!requireStrong || x.strong))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+    .slice(0, 8);
 }
 
 function extractPossibleCodes(text) {
@@ -176,14 +238,14 @@ function extractPossibleCodes(text) {
   return [...new Set(candidates.filter(c => c && c.length >= 2))];
 }
 
-function findStation(query, minScore = 12) {
-  const best = findBestStations(query, minScore);
+function findStation(query, minScore = 25) {
+  const best = findBestStations(query, minScore, false);
   return best.length ? best[0].station : null;
 }
 
 function findStationForOcr(query) {
-  // OCR : on exige une correspondance forte pour éviter les faux résultats comme "S1".
-  const best = findBestStations(query, 24);
+  // OCR : on exige une vraie preuve : code porte/local, identification ou au moins 2 mots distinctifs.
+  const best = findBestStations(query, 60, true);
   return best.length ? best[0] : null;
 }
 
@@ -226,7 +288,7 @@ function displayNoResult(query, suggestions = []) {
   resultBox.innerHTML = `
     <div class="no-result">
       OCR non fiable ou code incomplet. Je préfère ne pas afficher une mauvaise station.
-      <br><br>Tape manuellement un élément visible, par exemple : <b>15-602</b>, <b>PM HALL VIGER SUD</b>, <b>VIGER</b> ou <b>15400</b>.
+      <br><br>Tape manuellement un élément visible de la ligne du panneau, par exemple : <b>15-602</b>, <b>VIGER</b>, <b>CAFE MELK</b>, <b>POSTE CANADA</b>. Le niveau seul comme <b>N.15000</b> ou le secteur seul comme <b>S.2</b> ne suffit pas.
     </div>
     ${suggestionHtml}
   `;
@@ -262,18 +324,18 @@ function loadImageToCanvas(file) {
   });
 }
 
-function detectRedScreenArea(canvas) {
+function detectRedPixelsArea(canvas) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const { width, height } = canvas;
   const data = ctx.getImageData(0, 0, width, height).data;
   let minX = width, minY = height, maxX = 0, maxY = 0, count = 0;
 
-  for (let y = 0; y < height; y += 3) {
-    for (let x = 0; x < width; x += 3) {
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x += 2) {
       const i = (y * width + x) * 4;
       const r = data[i], g = data[i + 1], b = data[i + 2];
-      // Zone rouge/orangée du panneau incendie
-      if (r > 120 && g < 110 && b < 120 && r > g * 1.25) {
+      // Écran rouge/orange du panneau. On s'en sert comme repère.
+      if (r > 115 && g < 130 && b < 130 && r > g * 1.15 && r > b * 1.25) {
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
         maxX = Math.max(maxX, x);
@@ -284,15 +346,37 @@ function detectRedScreenArea(canvas) {
   }
 
   if (count < 80) return null;
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function detectRedScreenArea(canvas) {
+  const red = detectRedPixelsArea(canvas);
+  if (!red) return null;
+  const { width, height } = canvas;
   const padX = Math.round(width * 0.04);
-  const padTop = Math.round(height * 0.10); // inclure la bande violette avec le texte
+  const padTop = Math.round(height * 0.10);
   const padBottom = Math.round(height * 0.02);
   return {
-    x: Math.max(0, minX - padX),
-    y: Math.max(0, minY - padTop),
-    w: Math.min(width, maxX + padX) - Math.max(0, minX - padX),
-    h: Math.min(height, maxY + padBottom) - Math.max(0, minY - padTop)
+    x: Math.max(0, red.x - padX),
+    y: Math.max(0, red.y - padTop),
+    w: Math.min(width, red.x + red.w + padX) - Math.max(0, red.x - padX),
+    h: Math.min(height, red.y + red.h + padBottom) - Math.max(0, red.y - padTop)
   };
+}
+
+function detectPmLineArea(canvas) {
+  const red = detectRedPixelsArea(canvas);
+  if (!red) return null;
+  const { width, height } = canvas;
+
+  // Sur le panneau, la bonne information commence souvent par un symbole / ou ✓ puis PM.
+  // Elle est sur la bande violette juste AU-DESSUS de la grande zone rouge.
+  const bandH = Math.max(42, Math.round(red.h * 0.16));
+  const y = Math.max(0, red.y - Math.round(bandH * 1.15));
+  const x = Math.max(0, red.x - Math.round(width * 0.035));
+  const w = Math.min(width - x, red.w + Math.round(width * 0.09));
+  const h = Math.min(height - y, Math.round(bandH * 1.35));
+  return { x, y, w, h };
 }
 
 function cropCanvas(canvas, box) {
@@ -325,12 +409,73 @@ function preprocessForOcr(sourceCanvas) {
   return out;
 }
 
+function preprocessLineForOcr(sourceCanvas) {
+  // Spécialement pour la ligne "/ PM ..." : fort agrandissement + inversion.
+  // Le texte est souvent clair sur une bande violette/foncée.
+  const scale = 4;
+  const out = document.createElement('canvas');
+  out.width = sourceCanvas.width * scale;
+  out.height = sourceCanvas.height * scale;
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
+
+  const img = ctx.getImageData(0, 0, out.width, out.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const gray = (r * 0.299 + g * 0.587 + b * 0.114);
+    // Si c'est clair, on le transforme en noir; sinon fond blanc.
+    const v = gray > 135 ? 0 : 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+  return out;
+}
+
+function extractPmLine(text) {
+  const normalized = normalizeText(text)
+    .replace(/[✓✔√]/g, '/')
+    .replace(/[\\|]/g, '/')
+    .replace(/P\s*M/g, 'PM')
+    .replace(/P\.\s*M/g, 'PM')
+    .replace(/\s+/g, ' ');
+
+  // Cherche la portion qui commence par /PM ou PM, puis conserve les mots utiles.
+  const match = normalized.match(/(?:\/\s*)?PM\s+[A-Z0-9 .'-]+?(?=\s{2,}|$)/);
+  if (!match) return '';
+
+  let line = match[0]
+    .replace(/^\/\s*/, '')
+    .replace(/\b(ALARMES?|SUPERVISORY|SECURITES?|DEFECT|TROUBLE)\b.*$/g, '')
+    .trim();
+
+  // Si la ligne contient N.15400 ou S.7, on les garde, car ils aident à choisir.
+  const level = normalized.match(/\bN\.?\s*1[45]\d{3}\b/);
+  const sector = normalized.match(/\bS\.?\s*\d{1,2}\b/);
+  if (level && !line.includes(level[0])) line += ' ' + level[0];
+  if (sector && !line.includes(sector[0])) line += ' ' + sector[0];
+  return line.trim();
+}
+
+function extractUsefulOcrQueries(text) {
+  const queries = [];
+  const pmLine = extractPmLine(text);
+  if (pmLine) queries.push(pmLine);
+  extractPossibleCodes(text).forEach(c => queries.push(c));
+  const full = normalizeText(text);
+  if (full) queries.push(full);
+  return [...new Set(queries.filter(q => q && q.length >= 2))];
+}
+
 function canvasToDataUrl(canvas) {
   return canvas.toDataURL('image/png');
 }
 
-async function runOcrOnCanvas(canvas, label) {
+async function runOcrOnCanvas(canvas, label, psm = '6') {
   const result = await Tesseract.recognize(canvas, 'eng+fra', {
+    tessedit_pageseg_mode: psm,
+    preserve_interword_spaces: '1',
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/ .',
     logger: info => {
       if (info.status === 'recognizing text') {
@@ -344,51 +489,59 @@ async function runOcrOnCanvas(canvas, label) {
 
 async function ocrAndSearch(file) {
   const baseCanvas = await loadImageToCanvas(file);
-  const redBox = detectRedScreenArea(baseCanvas);
   const candidates = [];
 
+  // PRIORITÉ 1 : ligne "/ PM ..." sur la bande violette juste au-dessus de la zone rouge.
+  const pmLineBox = detectPmLineArea(baseCanvas);
+  if (pmLineBox) {
+    const pmLineCrop = cropCanvas(baseCanvas, pmLineBox);
+    candidates.push({ label: 'Lecture OCR de la ligne / PM', canvas: preprocessLineForOcr(pmLineCrop), psm: '7', priority: 1, raw: pmLineCrop });
+    cropPreview.src = canvasToDataUrl(pmLineCrop);
+    cropPreview.hidden = false;
+  }
+
+  // PRIORITÉ 2 : zone rouge élargie, seulement comme secours.
+  const redBox = detectRedScreenArea(baseCanvas);
   if (redBox) {
     const redCrop = cropCanvas(baseCanvas, redBox);
-    candidates.push({ label: 'Lecture OCR de la zone rouge ciblée', canvas: preprocessForOcr(redCrop), raw: redCrop });
-    cropPreview.src = canvasToDataUrl(redCrop);
-    cropPreview.hidden = false;
+    candidates.push({ label: 'Lecture OCR de la zone rouge ciblée', canvas: preprocessForOcr(redCrop), psm: '6', priority: 2, raw: redCrop });
+    if (!pmLineBox) {
+      cropPreview.src = canvasToDataUrl(redCrop);
+      cropPreview.hidden = false;
+    }
   } else {
     cropPreview.hidden = true;
   }
 
-  // Bande où se trouve habituellement la ligne violette avec le code.
-  const hBand = Math.round(baseCanvas.height * 0.26);
-  const yBand = Math.round(baseCanvas.height * 0.24);
-  candidates.push({
-    label: 'Lecture OCR de la bande du code',
-    canvas: preprocessForOcr(cropCanvas(baseCanvas, { x: 0, y: yBand, w: baseCanvas.width, h: hBand }))
-  });
-
-  candidates.push({ label: 'Lecture OCR complète', canvas: preprocessForOcr(baseCanvas) });
+  // PRIORITÉ 3 : lecture complète seulement en dernier recours.
+  candidates.push({ label: 'Lecture OCR complète', canvas: preprocessForOcr(baseCanvas), psm: '6', priority: 3 });
 
   let allText = '';
   let best = null;
 
   for (const item of candidates) {
-    const text = await runOcrOnCanvas(item.canvas, item.label);
-    allText += '\n' + text;
+    const text = await runOcrOnCanvas(item.canvas, item.label, item.psm);
+    allText += `\n--- ${item.label} ---\n${text}`;
 
-    const possibleCodes = extractPossibleCodes(text);
-    for (const code of possibleCodes) {
-      const attempt = findStationForOcr(code);
-      if (attempt && (!best || attempt.score > best.score)) best = { ...attempt, usedCode: code };
+    const queries = extractUsefulOcrQueries(text);
+    for (const query of queries) {
+      const attempt = findStationForOcr(query);
+      if (attempt) {
+        // Bonus si la requête vient de la vraie ligne /PM, car c'est le meilleur repère.
+        const score = attempt.score + (item.priority === 1 ? 20 : 0);
+        if (!best || score > best.score) best = { ...attempt, score, usedCode: query };
+      }
     }
 
-    const attemptFull = findStationForOcr(text);
-    if (attemptFull && (!best || attemptFull.score > best.score)) best = { ...attemptFull, usedCode: text.trim() };
+    // Si la ligne /PM donne une très bonne correspondance, on arrête avant de polluer avec le reste.
+    if (best && item.priority === 1 && best.score >= 34) break;
   }
 
   lastOcrText = allText.trim();
   ocrTextBox.textContent = lastOcrText || 'Aucun texte OCR lisible.';
   ocrTextBox.hidden = false;
 
-  // Ajout : si l’OCR contient VIGER/HALL/15400 mais pas assez fort, proposer les 5 meilleures options sans choisir automatiquement.
-  const suggestions = findBestStations(lastOcrText, 12);
+  const suggestions = findBestStations(extractPmLine(lastOcrText) || lastOcrText, 25, false);
   return { found: best?.station || null, usedCode: best?.usedCode || '', allText: lastOcrText, suggestions };
 }
 
