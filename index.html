@@ -1,6 +1,63 @@
 <!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recherche station manuelle</title><link rel="stylesheet" href="style.css"><script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script></head>
-<body><main class="wrap"><h1>Station manuelle incendie</h1><p class="hint">Photo du panneau → OCR → recherche dans la liste Excel. En cas de doute, tape un mot visible comme <b>JEANNE-MANCE</b>, <b>15-602</b> ou <b>VIGER</b>.</p>
-<section class="card"><h2>1. Photo / OCR</h2><input id="photo" type="file" accept="image/*" capture="environment"><div class="grid"><div><h3>Photo complète</h3><canvas id="fullCanvas"></canvas></div><div><h3>Ligne PM ciblée</h3><canvas id="cropCanvas"></canvas></div></div><button id="ocrBtn">Lire la photo avec OCR</button><button id="resetBtn" class="secondary">Réinitialiser</button><div id="status" class="status">En attente d'une photo.</div><pre id="ocrText" class="ocr"></pre></section>
-<section class="card"><h2>2. Résultat</h2><div id="query" class="query">Code détecté / recherché : —</div><div id="result"></div></section>
-<section class="card"><h2>Recherche manuelle</h2><input id="manual" placeholder="Ex : PM HALL JEANNE-MANCE, 15-602, MELK, POSTE CANADA"><button id="manualBtn">Rechercher</button><div id="manualHelp" class="hint"></div></section></main><script src="app.js"></script></body></html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Recherche station manuelle</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+<main class="wrap">
+  <h1>Station manuelle incendie</h1>
+  <p class="hint">Prends la photo du panneau, puis ajuste la bande bleue pour couvrir seulement la ligne violette/blanche où il est écrit <b>PM ... N... S...</b>. Attention : <b>N = niveau</b> et <b>S = secteur</b>, ce n'est pas un code unique.</p>
+
+  <section class="card">
+    <h2>1. Photo / zone OCR</h2>
+    <input id="photo" type="file" accept="image/*" capture="environment">
+
+    <div class="grid">
+      <div>
+        <h3>Photo complète avec zone ciblée</h3>
+        <div class="photoBox">
+          <canvas id="fullCanvas"></canvas>
+          <div id="cropOverlay"></div>
+        </div>
+      </div>
+      <div>
+        <h3>Bande réellement lue par OCR</h3>
+        <canvas id="cropCanvas"></canvas>
+      </div>
+    </div>
+
+    <div class="controls">
+      <label>Position verticale de la bande
+        <input id="cropY" type="range" min="15" max="75" value="42">
+      </label>
+      <label>Hauteur de la bande
+        <input id="cropH" type="range" min="5" max="25" value="10">
+      </label>
+    </div>
+
+    <button id="ocrBtn">Lire la bande avec OCR</button>
+    <button id="resetBtn" class="secondary">Réinitialiser</button>
+    <div id="status" class="status">En attente d'une photo.</div>
+    <pre id="ocrText" class="ocr"></pre>
+  </section>
+
+  <section class="card">
+    <h2>2. Résultat</h2>
+    <div id="query" class="query">Ligne détectée / recherchée : —</div>
+    <div id="result"></div>
+  </section>
+
+  <section class="card">
+    <h2>Recherche manuelle</h2>
+    <input id="manual" placeholder="Ex : PM HALL JEANNE-MANCE, 15-602, VIGER, MELK, POSTE CANADA">
+    <button id="manualBtn">Rechercher</button>
+    <div id="manualHelp" class="hint"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
