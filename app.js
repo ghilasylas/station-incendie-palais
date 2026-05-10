@@ -20,6 +20,7 @@ function norm(s) {
     .replace(/[|\[\]{}]/g, ' ')
     .replace(/[’']/g, ' ')
     .replace(/\bP\s*\.?\s*M\s*\.?\b/g, 'PM')
+    .replace(/\bPM(?=[A-Z])/g, 'PM ')
     .replace(/JEANNE\s*-?\s*MANCE/g, 'JEANNE MANCE')
     .replace(/ST\s*-?\s*ANTOINE/g, 'ST ANTOINE')
     .replace(/SAINT\s*-?\s*ANTOINE/g, 'ST ANTOINE')
@@ -113,12 +114,25 @@ function buildQueries(text, mode = 'ocr') {
   return [...new Set(q.map(x => x.trim()).filter(x => x.length >= 3 && !/^S\s*\d+$/i.test(x) && !/^N\s*\d+$/i.test(x) && !/^\d{4,5}$/.test(x)))];
 }
 
-const STOP = new Set(['PM', 'P', 'M', 'HALL', 'PRES', 'PRESSE', 'PORTE', 'LOCAL', 'CORR', 'NIV', 'NIVEAU', 'SORTIE', 'ENTREE', 'ACCES', 'ACC', 'SUD', 'NORD', 'EST', 'OUEST']);
+const STOP = new Set(['PM', 'P', 'M', 'HALL', 'PRES', 'PRESSE', 'PORTE', 'LOCAL', 'CORR', 'NIV', 'NIVEAU', 'SORTIE', 'ENTREE', 'ACCES', 'ACC', 'SUD', 'NORD', 'EST', 'OUEST', 'TE', 'TER', 'KR', 'NT', 'EN', 'PT', 'EE']);
 function tokenList(s) {
   return removeLevelSector(s)
+    .replace(/PM(?=[A-Z])/g, 'PM ')
     .replace(/[^A-Z0-9\- ]/g, ' ')
     .split(/\s+/)
-    .filter(t => t.length >= 3 && !STOP.has(t));
+    .map(t => t.trim())
+    .filter(t => t.length >= 3 && !STOP.has(t) && !/^\d+$/.test(t));
+}
+function importantTokens(s) {
+  return tokenList(s).filter(t => !['15000','16000','17000','18000','19000','20000','21000','22000','23000','24000','25000','26000','27000','28000'].includes(t));
+}
+function tokenCoverageScore(queryTokens, stationTokens) {
+  if (!queryTokens.length) return 0;
+  let matched = 0;
+  for (const qt of queryTokens) {
+    if (stationTokens.some(st => st === qt || st.includes(qt) || qt.includes(st))) matched++;
+  }
+  return matched / queryTokens.length;
 }
 function compact(s) { return norm(s).replace(/[^A-Z0-9]/g, ''); }
 
@@ -127,51 +141,70 @@ function scoreStation(query, st, mode = 'ocr', rawText = '') {
   if (!q || q.length < 3) return 0;
 
   const station = removeLevelSector(st.station);
-  const stationHay = removeLevelSector([st.station, st.identification, st.niveau, st.etage, st.localisation].join(' '));
+  const identification = norm(st.identification || '');
+  const stationHay = removeLevelSector([st.station, st.identification].join(' '));
   const manualHay = removeLevelSector([st.station, st.identification, st.description, st.localisation, st.niveau, st.etage].join(' '));
-  const hay = mode === 'manual' ? manualHay : stationHay; // IMPORTANT: OCR ne cherche plus dans la description pour éviter les faux positifs.
-  const qC = compact(q), hayC = compact(hay), stationC = compact(station);
+  const hay = mode === 'manual' ? manualHay : stationHay;
+  const qC = compact(q), hayC = compact(hay), stationC = compact(station), idC = compact(identification);
 
   let score = 0;
 
-  // Code porte/local: 15-602, 15-320, etc. = meilleur indice.
+  // 1) Identification / code porte: priorité absolue.
   const codeMatches = extractCodes(q);
   for (const code of codeMatches) {
     const c = compact(code);
-    if (stationC.includes(c)) score += 400;
-    else if (hayC.includes(c)) score += 250;
+    if (idC && idC.includes(c)) score += 650;
+    if (stationC.includes(c)) score += 550;
+    else if (hayC.includes(c)) score += 300;
   }
 
-  // Ligne PM complète ou partielle.
-  if (q.length >= 6) {
-    if (station.includes(q) || q.includes(station)) score += 220;
-    if (stationC.includes(qC) || qC.includes(stationC)) score += 180;
-    if (hay.includes(q)) score += 100;
-  }
+  // 2) Matching par mots importants de la colonne Station manuelle.
+  const qt = importantTokens(q);
+  const stationTokens = importantTokens(station);
+  const hayTokens = importantTokens(hay);
+  const coverage = tokenCoverageScore(qt, stationTokens);
 
-  // Tokens significatifs, seulement dans Station/ID pour OCR.
-  const qt = tokenList(q);
-  const stt = tokenList(station).join(' ');
+  if (qt.length >= 1 && coverage === 1) score += 420;
+  else if (qt.length >= 2 && coverage >= 0.66) score += 300;
+  else if (qt.length >= 1 && coverage >= 0.5) score += 180;
+
   for (const t of qt) {
-    if (stt.includes(t)) score += 80;
-    else if (hay.includes(t)) score += 35;
+    if (stationTokens.some(stt => stt === t || stt.includes(t) || t.includes(stt))) score += 120;
+    else if (mode === 'manual' && hayTokens.some(ht => ht === t || ht.includes(t) || t.includes(ht))) score += 45;
   }
 
-  // Combinaisons importantes.
-  if (q.includes('JEANNE') && q.includes('MANCE') && station.includes('JEANNE') && station.includes('MANCE')) score += 350;
-  if (q.includes('VIGER') && station.includes('VIGER')) score += 220;
-  if (q.includes('MELK') && station.includes('MELK')) score += 220;
-  if (q.includes('POSTE') && q.includes('CANADA') && station.includes('POSTE') && station.includes('CANADA')) score += 300;
+  // 3) Ligne station complète ou partielle, mais seulement après nettoyage N/S/niveau.
+  if (q.length >= 6) {
+    if (station.includes(q) || q.includes(station)) score += 260;
+    if (stationC.includes(qC) || qC.includes(stationC)) score += 220;
+    if (hayC.includes(qC)) score += 80;
+  }
 
-  // Niveau: utile seulement comme bonus, jamais suffisant seul.
+  // 4) Combinaisons métier fortes.
+  if (q.includes('VESTI') && q.includes('HOMME') && station.includes('VESTI') && station.includes('HOMME')) score += 650;
+  if (q.includes('VESTI') && station.includes('VESTI') && !station.includes('HOMME')) score += 160;
+  if (q.includes('JEANNE') && q.includes('MANCE') && station.includes('JEANNE') && station.includes('MANCE')) score += 650;
+  if (q.includes('VIGER') && station.includes('VIGER')) score += 350;
+  if (q.includes('MELK') && station.includes('MELK')) score += 350;
+  if (q.includes('POSTE') && q.includes('CANADA') && station.includes('POSTE') && station.includes('CANADA')) score += 500;
+
+  // 5) Niveau / secteur = bonus très faible seulement, jamais suffisant.
   const level = extractLevel(rawText);
-  if (level && String(st.niveau || '').replace(/\D/g, '') === level) score += 35;
+  if (level && String(st.niveau || '').replace(/\D/g, '') === level) score += 20;
+  const sec = extractSectorNumber(rawText);
+  if (sec && String(st.localisation || '').toUpperCase().includes('SUD') && ['2','3','4','5','6','7','8'].includes(sec)) score += 5;
 
-  // Pénalité si la requête OCR ne contient ni PM, ni code, ni mot fort.
-  const hasStrong = /\bPM\b/.test(q) || codeMatches.length > 0 || ['JEANNE', 'VIGER', 'MELK', 'POSTE', 'CANADA'].some(k => q.includes(k));
-  if (mode === 'ocr' && !hasStrong) score = Math.min(score, 40);
+  // 6) Pénalités anti-faux positifs.
+  // Si la requête contient VESTI/HOMME, une station SORTIE ne doit pas gagner seulement grâce au niveau.
+  if ((q.includes('VESTI') || q.includes('HOMME')) && !station.includes('VESTI') && !station.includes('HOMME')) score -= 500;
+  if (q.includes('HOMME') && !station.includes('HOMME')) score -= 300;
+  if (q.includes('JEANNE') && !station.includes('JEANNE')) score -= 250;
 
-  return score;
+  // OCR: exiger un signal fort. S.2 / N.15000 seuls ne confirment rien.
+  const hasStrong = codeMatches.length > 0 || qt.length > 0 || ['JEANNE', 'VIGER', 'MELK', 'POSTE', 'CANADA', 'VESTI', 'HOMME'].some(k => q.includes(k));
+  if (mode === 'ocr' && !hasStrong) score = Math.min(score, 30);
+
+  return Math.max(0, score);
 }
 
 function searchSmart(raw, mode = 'ocr') {
@@ -199,7 +232,7 @@ function renderResult(raw, mode = 'ocr') {
   const top = scored[0], second = scored[1];
 
   // Confirmation stricte: le top doit être nettement meilleur.
-  if (top && top.score >= 300 && (!second || top.score - second.score >= 120)) {
+  if (top && top.score >= 350 && (!second || top.score - second.score >= 100)) {
     box.innerHTML = stationCard(top);
     return;
   }
